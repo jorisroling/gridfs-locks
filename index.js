@@ -44,6 +44,7 @@ var isMongoDriver20 = function (db) {
 //
 var LockCollection = exports.LockCollection = function(db, options) {
   var self = this;
+ var self = this;
   if (!(self instanceof LockCollection)) { return new LockCollection(db, options); }
 
   eventEmitter.call(self);  // We are an eventEmitter
@@ -72,14 +73,15 @@ var LockCollection = exports.LockCollection = function(db, options) {
     self._isMongo26 = is26;
     self._isMongoDriver20 = isMongoDriver20(db);
 
-    db.collection(collectionName, function(err, collection) {
-      if (err) { return emitError(self, err); }
-      collection.ensureIndex([['files_id', 1]], {unique:true}, function(err, index) {
+    const collection = db.collection(collectionName);
+//    db.collection(collectionName, function(err, collection) {
+//      if (err) { return emitError(self, err); }
+      collection.createIndex([['files_id', 1]], {unique:true}, function(err, index) {
         if (err) { return emitError(self, err); }
         self.collection = collection;
         self.emit('ready');
       });
-    });
+    //});
   });
 
   self.writeConcern = options.w == null ? 1 : options.w;
@@ -177,7 +179,7 @@ Lock.prototype.removeLock = function () {
     clearTimeout(self.expiresSoonTimeout);
     clearTimeout(self.expiredTimeout);
 
-    self.collection.findAndRemove(query, [], {w: self.lockCollection.writeConcern}, function (err, doc) {
+    self.collection.findOneAndDelete(query, {/*writeConcern: {w: self.lockCollection.writeConcern}*/}, function (err, doc) {
       if (err) { return emitError(self, err); }
       if (self.lockCollection._isMongoDriver20 && doc && doc.hasOwnProperty('value')) { doc = doc.value; }
       self.lockType = null;
@@ -239,7 +241,7 @@ Lock.prototype.releaseLock = function () {
       return emitError(self, "Lock.releaseLock invalid lockType.");
     }
 
-    self.collection.findAndModify(query, [], update, {w: self.lockCollection.writeConcern, new: true}, function (err, doc) {
+    self.collection.findOneAndUpdate(query, update, {/*writeConcern: {w: self.lockCollection.writeConcern}*/ returnDocument: 'after'}, function (err, doc) {
 
       if (err) { return emitError(self, err); }
       if (self.lockCollection._isMongoDriver20 && doc && doc.hasOwnProperty('value')) { doc = doc.value; }
@@ -261,7 +263,7 @@ Lock.prototype.releaseLock = function () {
       if ((lt === 'r') && doc && (doc.read_locks == 0)) {
         query = {files_id: self.fileId, read_locks: 0, write_lock: false};
         update = {$currentDate: { expires: true }};
-        self.collection.findAndModify(query, [], update, {w: self.lockCollection.writeConcern, new: true}, function (err, doc) {
+        self.collection.findOneAndUpdate(query, update, {/*writeConcern: {w: self.lockCollection.writeConcern}*/ returnDocument: 'after'}, function (err, doc) {
           if (err) { console.warn("Error returned from expiration time reset on release", err); }
           if (self.lockCollection._isMongoDriver20 && doc && doc.hasOwnProperty('value')) { doc = doc.value; }
         });
@@ -304,10 +306,9 @@ Lock.prototype.renewLock = function() {
 
     self.lockExpireTime = new Date(new Date().getTime() + (self.lockExpiration || never));
 
-    self.collection.findAndModify({files_id: self.fileId},
-      [],
+    self.collection.findOneAndUpdate({files_id: self.fileId},
       {$max: {expires: self.lockExpireTime}},  // don't clobber an already extended shared read lock
-      {w: self.lockCollection.writeConcern, new: true},
+      {/*writeConcern: {w: self.lockCollection.writeConcern}*/ returnDocument: 'after'},
       function (err, doc) {
         if (err) { return emitError(self, err); }
         if (self.lockCollection._isMongoDriver20 && doc && doc.hasOwnProperty('value')) { doc = doc.value; }
@@ -465,11 +466,10 @@ var timeoutReadLockQuery = function (self, options) {
                           writes: 0 }
                 };
 
-  self.collection.findAndModify(
+  self.collection.findOneAndUpdate(
     self.query,
-    [],
     self.update,
-    { w: self.lockCollection.writeConcern, new: true, upsert: true },
+    { /*writeConcern: {w: self.lockCollection.writeConcern}*/ returnDocument: 'after', upsert: true },
     function (err, doc) {
       if (err && ((err.name !== 'MongoError') || (err.code !== 11000))) { return emitError(self, err); }
       if (self.lockCollection._isMongoDriver20 && doc && doc.hasOwnProperty('value')) { doc = doc.value; }
@@ -521,10 +521,9 @@ var timeoutWriteLockQuery = function (self, options) {
                           reads: 0 }
                 };
 
-  self.collection.findAndModify(self.query,
-    [],
+  self.collection.findOneAndUpdate(self.query,
     self.update,
-    {w: self.lockCollection.writeConcern, new: true, upsert: true},
+    {/*writeConcern: {w: self.lockCollection.writeConcern}*/ returnDocument: 'after', upsert: true},
     function (err, doc) {
       if (err && ((err.name !== 'MongoError') || (err.code !== 11000))) { return emitError(self, err); }
       if (self.lockCollection._isMongoDriver20 && doc && doc.hasOwnProperty('value')) { doc = doc.value; }
@@ -541,10 +540,9 @@ var timeoutWriteLockQuery = function (self, options) {
       } else {  // !doc
         if (new Date().getTime() - self.timeCreated >= self.timeOut) {
           // Clear the write_req flag, since this obtainWriteLock has timed out
-          self.collection.findAndModify({files_id: self.fileId, write_req: true},
-            [],
+          self.collection.findOneAndUpdate({files_id: self.fileId, write_req: true},
             {$set: {write_req: false}},
-            {w: self.lockCollection.writeConcern, new: true},
+            {/*writeConcern: {w: self.lockCollection.writeConcern}*/ returnDocument: 'after'},
             function (err, doc) {
               if (err) { return emitError(self, err); }
               if (self.lockCollection._isMongoDriver20 && doc && doc.hasOwnProperty('value')) { doc = doc.value; }
@@ -553,10 +551,9 @@ var timeoutWriteLockQuery = function (self, options) {
           return self.emit('timed-out');
         } else {
           // write_req gets set every time because claimed/released write locks and timed out write requests clear it
-          self.collection.findAndModify({files_id: self.fileId, write_req: false},
-            [],
+          self.collection.findOneAndUpdate({files_id: self.fileId, write_req: false},
             {$set: {write_req: true}},
-            {new: true},
+            {returnDocument: 'after'},
             function (err, doc) {
               if (err) { return emitError(self, err); }
               if (self.lockCollection._isMongoDriver20 && doc && doc.hasOwnProperty('value')) { doc = doc.value; }
@@ -575,8 +572,7 @@ var timeoutWriteLockQuery = function (self, options) {
 // above, but using MongoDB 2.4 compatible queries.
 
 var initializeLockDoc_24 = function (self, callback) {
-  self.collection.findAndModify({files_id: self.fileId},
-    [],
+  self.collection.findOneAndUpdate({files_id: self.fileId},
     {$setOnInsert: {files_id: self.fileId,
                     expires: self.timeCreated,
                     read_locks: 0,
@@ -585,7 +581,7 @@ var initializeLockDoc_24 = function (self, callback) {
                     reads: 0,
                     writes: 0,
                     meta: null}},
-    {w: self.lockCollection.writeConcern, upsert: true, new: true},
+    {/*writeConcern: {w: self.lockCollection.writeConcern}*/ upsert: true, returnDocument: 'after'},
     callback);
 };
 
@@ -604,7 +600,7 @@ var releaseLock_24 = function () {
         update = {$inc: {read_locks: -1}, $set: {meta: null}};
 
     // Case for read_locks > 1
-    self.collection.findAndModify(query, [], update, {w: self.lockCollection.writeConcern, new: true}, function (err, doc) {
+    self.collection.findOneAndUpdate(query, update, {/*writeConcern: {w: self.lockCollection.writeConcern}*/ returnDocument: 'after'}, function (err, doc) {
       if (err) { return emitError(self, err); }
       if (self.lockCollection._isMongoDriver20 && doc && doc.hasOwnProperty('value')) { doc = doc.value; }
       if (doc) {
@@ -620,7 +616,7 @@ var releaseLock_24 = function () {
         update = {$set: {read_locks: 0, expires: new Date(), meta: null}};
 
         // Case for read_locks == 1
-        self.collection.findAndModify(query, [], update, {w: self.lockCollection.writeConcern, new: true}, function (err, doc) {
+        self.collection.findOneAndUpdate(query, update, {/*writeConcern: {w: self.lockCollection.writeConcern}*/ returnDocument: 'after'}, function (err, doc) {
           if (err) { return emitError(self, err); }
           if (self.lockCollection._isMongoDriver20 && doc && doc.hasOwnProperty('value')) { doc = doc.value; }
           if (doc) {
@@ -651,7 +647,7 @@ var releaseLock_24 = function () {
     var query = {files_id: self.fileId, write_lock: true},
         update = {$set: {write_lock: false, write_req: false, expires: new Date(), meta: null}};
 
-    self.collection.findAndModify(query, [], update, {w: self.lockCollection.writeConcern, new: true}, function (err, doc) {
+    self.collection.findOneAndUpdate(query, update, {/*writeConcern: {w: self.lockCollection.writeConcern}*/ returnDocument: 'after'}, function (err, doc) {
       if (err) { return emitError(self, err); }
       if (self.lockCollection._isMongoDriver20 && doc && doc.hasOwnProperty('value')) { doc = doc.value; }
       self.lockType = null;
@@ -681,10 +677,9 @@ var renewLock_24 = function() {
 
   self.lockExpireTime = new Date(new Date().getTime() + (self.lockExpiration || never));
 
-  self.collection.findAndModify({files_id: self.fileId, expires: { $lt: self.lockExpireTime }},
-    [],
+  self.collection.findOneAndUpdate({files_id: self.fileId, expires: { $lt: self.lockExpireTime }},
     {$set: {expires: self.lockExpireTime}},
-    {w: self.lockCollection.writeConcern, new: true},
+    {/*writeConcern: {w: self.lockCollection.writeConcern}*/ returnDocument: 'after'},
     function (err, doc) {
       if (err) { return emitError(self, err); }
       if (self.lockCollection._isMongoDriver20 && doc && doc.hasOwnProperty('value')) { doc = doc.value; }
@@ -771,10 +766,9 @@ var timeoutReadLockQuery_24 = function (self, options) {
                       {expires: {$lt: new Date(new Date() - 2*self.pollingInterval)}}]};
   self.update = {$inc: {read_locks: 1, reads: 1}, $set: {write_lock: false, write_req: false, expires: self.lockExpireTime, meta: self.metaData}};
 
-  self.collection.findAndModify(self.query,
-    [],
+  self.collection.findOneAndUpdate(self.query,
     self.update,
-    {w: self.lockCollection.writeConcern, new: true},
+    {/*writeConcern: {w: self.lockCollection.writeConcern}*/ returnDocument: 'after'},
     function (err, doc) {
       if (err) { return emitError(self, err); }
       if (self.lockCollection._isMongoDriver20 && doc && doc.hasOwnProperty('value')) { doc = doc.value; }
@@ -784,10 +778,9 @@ var timeoutReadLockQuery_24 = function (self, options) {
         self.query = {files_id: self.fileId, write_lock: false, write_req: false, expires: { $gt: self.lockExpireTime }};
         self.update = {$inc: {read_locks: 1, reads: 1}, $set: {meta: self.metaData}};
 
-        self.collection.findAndModify(self.query,
-          [],
+        self.collection.findOneAndUpdate(self.query,
           self.update,
-          {w: self.lockCollection.writeConcern, new: true},
+          {/*writeConcern: {w: self.lockCollection.writeConcern}*/ returnDocument: 'after'},
           function (err, doc) {
             if (err) { return emitError(self, err); }
             if (self.lockCollection._isMongoDriver20 && doc && doc.hasOwnProperty('value')) { doc = doc.value; }
@@ -819,10 +812,9 @@ var timeoutWriteLockQuery_24 = function (self, options) {
   self.lockExpireTime = new Date(new Date().getTime() + (self.lockExpiration || never));
   self.update = {$set: {write_lock: true, write_req: false, read_locks: 0, expires: self.lockExpireTime, meta: self.metaData}, $inc:{writes: 1}};
 
-  self.collection.findAndModify(self.query,
-    [],
+  self.collection.findOneAndUpdate(self.query,
     self.update,
-    {w: self.lockCollection.writeConcern, new: true},
+    {/*writeConcern: {w: self.lockCollection.writeConcern}*/ returnDocument: 'after'},
     function (err, doc) {
       if (err) { return emitError(self, err); }
       if (self.lockCollection._isMongoDriver20 && doc && doc.hasOwnProperty('value')) { doc = doc.value; }
@@ -838,10 +830,9 @@ var timeoutWriteLockQuery_24 = function (self, options) {
       }
       if (new Date().getTime() - self.timeCreated >= self.timeOut) {
         // Clear the write_req flag, since this obtainWriteLock has timed out
-        self.collection.findAndModify({files_id: self.fileId, write_req: true},
-          [],
+        self.collection.findOneAndUpdate({files_id: self.fileId, write_req: true},
           {$set: {write_req: false}},
-          {w: self.lockCollection.writeConcern, new: true},
+          {/*writeConcern: {w: self.lockCollection.writeConcern}*/ returnDocument: 'after'},
           function (err, doc) {
             if (err) { return emitError(self, err); }
             if (self.lockCollection._isMongoDriver20 && doc && doc.hasOwnProperty('value')) { doc = doc.value; }
@@ -850,10 +841,9 @@ var timeoutWriteLockQuery_24 = function (self, options) {
         return self.emit('timed-out');
       } else {
         // write_req gets set every time because claimed/released write locks and timed out write requests clear it
-        self.collection.findAndModify({files_id: self.fileId, write_req: false},
-          [],
+        self.collection.findOneAndUpdate({files_id: self.fileId, write_req: false},
           {$set: {write_req: true}},
-          {new: true},
+          {returnDocument: 'after'},
           function (err, doc) {
             if (err) { return emitError(self, err); }
             if (self.lockCollection._isMongoDriver20 && doc && doc.hasOwnProperty('value')) { doc = doc.value; }

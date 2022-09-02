@@ -21,9 +21,10 @@ describe 'gridfs-locks', () ->
   db = null
 
   before (done) ->
-    server = mongo.MongoClient.connect 'mongodb://localhost:27017/test', (err, connection) ->
+    server = mongo.MongoClient.connect 'mongodb://localhost:3001/test', (err, connection) ->
       throw err if err
-      db = connection
+      # db = connection
+      db = connection.db('test')
       done()
 
   describe 'LockCollection', () ->
